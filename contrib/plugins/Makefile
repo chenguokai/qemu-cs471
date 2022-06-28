@@ -20,6 +20,7 @@ NAMES += howvec
 NAMES += lockstep
 NAMES += hwprofile
 NAMES += cache
+NAMES += hotinstpair
 
 SONAMES := $(addsuffix .so,$(addprefix lib,$(NAMES)))
 
