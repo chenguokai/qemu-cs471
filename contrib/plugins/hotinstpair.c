@@ -25,6 +25,7 @@ typedef struct InstCountInfo
     const char* name;
     uint32_t mask;
     uint32_t pattern;
+    uint16_t idx;
     uint8_t cnt_type;
     uint64_t cnt;
     GHashTable *follow_insts;
@@ -33,12 +34,11 @@ typedef struct InstCountInfo
 typedef struct BasicBlock
 {
     uint64_t start_addr;
-    GQueue *insts;               // inst patterns
+    GQueue *insts;               // inst indexes
     uint64_t exec_cnt;
     uint64_t trans_cnt;
 }BasicBlock;
 
-static GHashTable *pattern_map; // pattern -> InstCountInfo
 static GQueue *block_que;       // start_addr
 static GHashTable *block_map;   // start_addr -> BasicBlock
 static uint64_t inst_cnt;
@@ -678,8 +678,50 @@ static InstCountInfo riscv64_insns[] = {
     {        "r2_rm",           "fcvt_lu_h", 0xfff0007f, 0xc4300053, CT_INDIVIDUAL},
     {        "r2_rm",            "fcvt_h_l", 0xfff0007f, 0xd4200053, CT_INDIVIDUAL},
     {        "r2_rm",           "fcvt_h_lu", 0xfff0007f, 0xd4300053, CT_INDIVIDUAL},
+    /* Quadrant 0 */
+    {           "c",           "c.addi4spn", 0xe003, 0x0000, CT_INDIVIDUAL},
+    {           "c",                "c.fld", 0xe003, 0x2000, CT_INDIVIDUAL},
+    {           "c",                 "c.lw", 0xe003, 0x4000, CT_INDIVIDUAL},
+    {           "c",                 "c.ld", 0xe003, 0x6000, CT_INDIVIDUAL},
+    {           "c",                "c.fsd", 0xe003, 0xa000, CT_INDIVIDUAL},
+    {           "c",                 "c.sw", 0xe003, 0xc000, CT_INDIVIDUAL},
+    {           "c",                 "c.sd", 0xe003, 0xe000, CT_INDIVIDUAL},
+    /* Quadrant 1 */
+    {           "c",           "c_nop", 0xffff, 0x0001, CT_INDIVIDUAL},
+    {           "c",          "c_addi", 0xe003, 0x0001, CT_INDIVIDUAL},
+    {           "c",         "c_addiw", 0xe003, 0x2001, CT_INDIVIDUAL},
+    {           "c",            "c_li", 0xe003, 0x4001, CT_INDIVIDUAL},
+    {           "c",      "c_addi16sp", 0xef83, 0x6101, CT_INDIVIDUAL},
+    {           "c",           "c_lui", 0xe003, 0x6001, CT_INDIVIDUAL},
+    {           "cr",       "c_srli64", 0xfc7f, 0x8001, CT_INDIVIDUAL},
+    {           "cr",       "c_srai64", 0xfc7f, 0x8401, CT_INDIVIDUAL},
+    {           "c",          "c_andi", 0xec03, 0x8801, CT_INDIVIDUAL},
+    {           "cr",          "c_sub", 0xfc63, 0x8c01, CT_INDIVIDUAL},
+    {           "cr",          "c_xor", 0xfc63, 0x8c21, CT_INDIVIDUAL},
+    {           "cr",           "c_or", 0xfc63, 0x8c41, CT_INDIVIDUAL},
+    {           "cr",          "c_and", 0xfc63, 0x8c61, CT_INDIVIDUAL},
+    {           "cr",         "c_subw", 0xfc63, 0x9c01, CT_INDIVIDUAL},
+    {           "cr",         "c_addw", 0xfc63, 0x9c21, CT_INDIVIDUAL},
+    {           "c",             "c_j", 0xe003, 0xa003, CT_INDIVIDUAL},
+    {           "cr",         "c_beqz", 0xe003, 0xc001, CT_INDIVIDUAL},
+    {           "cr",         "c_beqz", 0xe003, 0xe001, CT_INDIVIDUAL},
+    /* Quadrant 2 */
+    {           "c",        "c_slli64", 0xf07f, 0x0002, CT_INDIVIDUAL},
+    {           "cl",        "c_fldsp", 0xe003, 0x2002, CT_INDIVIDUAL},
+    {           "cl",         "c_lwsp", 0xe003, 0x4002, CT_INDIVIDUAL},
+    {           "cl",         "c_ldsp", 0xe003, 0x6002, CT_INDIVIDUAL},
+    {           "c",            "c_jr", 0xf07f, 0x8002, CT_INDIVIDUAL},
+    {           "c",            "c_mv", 0xf003, 0x8002, CT_INDIVIDUAL},
+    {           "c",         "c_break", 0xffff, 0x9002, CT_INDIVIDUAL},
+    {           "c",          "c_jalr", 0xf07f, 0x9002, CT_INDIVIDUAL},
+    {           "c",           "c_add", 0xf003, 0x9002, CT_INDIVIDUAL},
+    {           "c",          "c_fdsp", 0xe003, 0xa002, CT_INDIVIDUAL},
+    {           "c",          "c_swsp", 0xe003, 0xc002, CT_INDIVIDUAL},
+    {           "c",          "c_sdsp", 0xe003, 0xe002, CT_INDIVIDUAL},
     { "Unclassified",   "unclas",   0x00000000, 0x00000000, CT_INDIVIDUAL },
 };
+
+static InstCountInfo *inst_table = riscv64_insns;
 
 static void freeInstInfo(gpointer data)
 {
@@ -691,21 +733,22 @@ static void freeInstInfo(gpointer data)
 static void count_pair_in_block(const BasicBlock* bb) {
     GQueue* insts_que = bb->insts;
     GList* iqit = g_queue_peek_head_link(insts_que);
-    uint32_t pattern = GPOINTER_TO_UINT(iqit->data);
+    uint16_t idx = (uint16_t)GPOINTER_TO_UINT(iqit->data);
     // the first inst's info
-    InstCountInfo* inst_info = g_hash_table_lookup(pattern_map, GUINT_TO_POINTER(pattern));
+    InstCountInfo* inst_info = &inst_table[idx];
+
     inst_info->cnt += bb->exec_cnt;
     inst_cnt += bb->exec_cnt * g_queue_get_length(insts_que);
     for (iqit = iqit->next; iqit; iqit = iqit->next) {
-        // follow inst's pattern
-        pattern = GPOINTER_TO_UINT(iqit->data);
-        uint64_t pair_cnt = (uint64_t)g_hash_table_lookup(inst_info->follow_insts, GUINT_TO_POINTER(pattern));
+        // follow inst's idx
+        idx = (uint16_t)GPOINTER_TO_UINT(iqit->data);
+        uint64_t pair_cnt = (uint64_t)g_hash_table_lookup(inst_info->follow_insts, GUINT_TO_POINTER(idx));
         if (pair_cnt != 0) {
-            g_hash_table_replace(inst_info->follow_insts, GUINT_TO_POINTER(pattern), (gpointer)(pair_cnt + bb->exec_cnt));
+            g_hash_table_replace(inst_info->follow_insts, GUINT_TO_POINTER(idx), (gpointer)(pair_cnt + bb->exec_cnt));
         } else {
-            g_hash_table_insert(inst_info->follow_insts, GUINT_TO_POINTER(pattern), (gpointer)bb->exec_cnt);
+            g_hash_table_insert(inst_info->follow_insts, GUINT_TO_POINTER(idx), (gpointer)bb->exec_cnt);
         }
-        inst_info = g_hash_table_lookup(pattern_map, GUINT_TO_POINTER(pattern));
+        inst_info = &inst_table[idx];
         inst_info->cnt += bb->exec_cnt;
     }
 }
@@ -717,26 +760,26 @@ static void count_pair_across_block(void) {
     GQueue* insts_que = bb->insts;
     GList* tail = g_queue_peek_tail_link(insts_que);
     GList* head = NULL;
-    uint32_t pattern = GPOINTER_TO_UINT(tail->data);
+    uint16_t idx = (uint16_t)GPOINTER_TO_UINT(tail->data);
     // inst info of tail of block
-    InstCountInfo* inst_info = g_hash_table_lookup(pattern_map, GUINT_TO_POINTER(pattern));
+    InstCountInfo* inst_info = &inst_table[idx];
     // fprintf(stderr, "%s\n", inst_info->name);
     for (it = it -> next; it; it = it->next) {
         pc = (uint64_t)it->data;
         bb = (BasicBlock*) g_hash_table_lookup(block_map, (gconstpointer) pc);
         insts_que = bb->insts;
         head = g_queue_peek_head_link(insts_que);
-        pattern = GPOINTER_TO_UINT(head->data);
-        uint64_t pair_cnt = (uint64_t)g_hash_table_lookup(inst_info->follow_insts, GUINT_TO_POINTER(pattern));
+        idx = (uint16_t)GPOINTER_TO_UINT(head->data);
+        uint64_t pair_cnt = (uint64_t)g_hash_table_lookup(inst_info->follow_insts, GUINT_TO_POINTER(idx));
         if (pair_cnt) {
-            g_hash_table_replace(inst_info->follow_insts, GUINT_TO_POINTER(pattern), (gpointer)(pair_cnt + 1));
+            g_hash_table_replace(inst_info->follow_insts, GUINT_TO_POINTER(idx), (gpointer)(pair_cnt + 1));
         } else {
-            g_hash_table_replace(inst_info->follow_insts, GUINT_TO_POINTER(pattern), (gpointer)(1));
+            g_hash_table_replace(inst_info->follow_insts, GUINT_TO_POINTER(idx), (gpointer)(1));
         }
 
         tail = g_queue_peek_tail_link(insts_que);
-        pattern = GPOINTER_TO_UINT(tail->data);
-        inst_info = g_hash_table_lookup(pattern_map, GUINT_TO_POINTER(pattern));
+        idx = (uint16_t)GPOINTER_TO_UINT(tail->data);
+        inst_info = &inst_table[idx];
         // fprintf(stderr, "%s\n", inst_info->name);
     }
 }
@@ -751,9 +794,9 @@ static void print_inst_pairs(void)
         GList* it = keys;
         if (it) {
             for (; it; it = it->next) {
-                uint32_t follow_inst_pattern = GPOINTER_TO_UINT(it->data);
-                uint64_t cnt = (uint64_t)g_hash_table_lookup(riscv64_insns[i].follow_insts, GUINT_TO_POINTER(follow_inst_pattern));
-                InstCountInfo* follow_inst_info = g_hash_table_lookup(pattern_map, GUINT_TO_POINTER(follow_inst_pattern));
+                uint16_t follow_inst_idx = (uint16_t)GPOINTER_TO_UINT(it->data);
+                uint64_t cnt = (uint64_t)g_hash_table_lookup(riscv64_insns[i].follow_insts, GUINT_TO_POINTER(follow_inst_idx));
+                InstCountInfo* follow_inst_info = &inst_table[follow_inst_idx];
                 g_string_append_printf(report, "%s-%s: %lu\n", riscv64_insns[i].name, follow_inst_info->name, cnt);
             }
             qemu_plugin_outs(report->str);
@@ -806,22 +849,20 @@ static void plugin_exit(qemu_plugin_id_t id, void* p)
     print_insts();
     print_inst_pairs();
 
-    g_hash_table_destroy(pattern_map);
     g_queue_free(block_que);
 }
 
 static void plugin_init(void)
 {
-    pattern_map = g_hash_table_new_full(NULL, g_direct_equal, NULL, &freeInstInfo);
     for (size_t i=0; i < ARRAY_SIZE(riscv64_insns); i++) {
         riscv64_insns[i].follow_insts = g_hash_table_new(NULL, g_direct_equal);
-        g_hash_table_insert(pattern_map, GUINT_TO_POINTER(riscv64_insns[i].pattern), &riscv64_insns[i]);
+        riscv64_insns[i].idx = i;
     }
     block_que = g_queue_new();
     block_map = g_hash_table_new(NULL, g_direct_equal);
 }
 
-static uint32_t find_pattern(struct qemu_plugin_insn *insn)
+static uint16_t find_idx(struct qemu_plugin_insn *insn)
 {
     uint32_t inst = *(uint32_t*) qemu_plugin_insn_data(insn);
     uint32_t masked_bits;
@@ -837,7 +878,7 @@ static uint32_t find_pattern(struct qemu_plugin_insn *insn)
 
     g_assert(entry);
 
-    return entry->pattern;
+    return entry->idx;
 }
 
 static void vcpu_tb_exec(unsigned int cpu_index, void *udata)
@@ -871,8 +912,8 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
         bb->trans_cnt = 1;
         for (size_t i = 0; i < n; i++) {
             struct qemu_plugin_insn *insn = qemu_plugin_tb_get_insn(tb, i);
-            uint32_t pattern = find_pattern(insn);
-            g_queue_push_tail(bb->insts, GUINT_TO_POINTER(pattern));
+            uint16_t idx = find_idx(insn);
+            g_queue_push_tail(bb->insts, GUINT_TO_POINTER(idx));
         }
         g_hash_table_insert(block_map, (gpointer)pc, (gpointer)bb);
     }
