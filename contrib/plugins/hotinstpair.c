@@ -43,6 +43,7 @@ static GQueue *block_que;       // start_addr
 static GHashTable *block_map;   // start_addr -> BasicBlock
 static uint64_t inst_cnt;
 static bool do_inline;
+static uint32_t unclassed_inst;
 
 static InstCountInfo riscv64_insns[] = {
     {"ecall",               "ecall", 0xffffffff, 0x00000073, CT_INDIVIDUAL},
@@ -694,7 +695,9 @@ static InstCountInfo riscv64_insns[] = {
     {           "c",      "c_addi16sp", 0xef83, 0x6101, CT_INDIVIDUAL},
     {           "c",           "c_lui", 0xe003, 0x6001, CT_INDIVIDUAL},
     {           "cr",       "c_srli64", 0xfc7f, 0x8001, CT_INDIVIDUAL},
+    {           "c",          "c_srli", 0xec03, 0x8001, CT_INDIVIDUAL},
     {           "cr",       "c_srai64", 0xfc7f, 0x8401, CT_INDIVIDUAL},
+    {           "c",          "c_srai", 0xec03, 0x8401, CT_INDIVIDUAL},
     {           "c",          "c_andi", 0xec03, 0x8801, CT_INDIVIDUAL},
     {           "cr",          "c_sub", 0xfc63, 0x8c01, CT_INDIVIDUAL},
     {           "cr",          "c_xor", 0xfc63, 0x8c21, CT_INDIVIDUAL},
@@ -702,11 +705,12 @@ static InstCountInfo riscv64_insns[] = {
     {           "cr",          "c_and", 0xfc63, 0x8c61, CT_INDIVIDUAL},
     {           "cr",         "c_subw", 0xfc63, 0x9c01, CT_INDIVIDUAL},
     {           "cr",         "c_addw", 0xfc63, 0x9c21, CT_INDIVIDUAL},
-    {           "c",             "c_j", 0xe003, 0xa003, CT_INDIVIDUAL},
+    {           "c",             "c_j", 0xe003, 0xa001, CT_INDIVIDUAL},
     {           "cr",         "c_beqz", 0xe003, 0xc001, CT_INDIVIDUAL},
     {           "cr",         "c_beqz", 0xe003, 0xe001, CT_INDIVIDUAL},
     /* Quadrant 2 */
     {           "c",        "c_slli64", 0xf07f, 0x0002, CT_INDIVIDUAL},
+    {           "c",          "c_slli", 0xe003, 0x0002, CT_INDIVIDUAL},
     {           "cl",        "c_fldsp", 0xe003, 0x2002, CT_INDIVIDUAL},
     {           "cl",         "c_lwsp", 0xe003, 0x4002, CT_INDIVIDUAL},
     {           "cl",         "c_ldsp", 0xe003, 0x6002, CT_INDIVIDUAL},
@@ -846,6 +850,9 @@ static void plugin_exit(qemu_plugin_id_t id, void* p)
     g_string_append_printf(report, "total inst cnt: %lu\n", inst_cnt);
     qemu_plugin_outs(report->str);
 
+    if (unclassed_inst != 0) {
+        fprintf(stderr, "unclassed inst: %#08x\n", unclassed_inst);
+    }
     print_insts();
     print_inst_pairs();
 
@@ -874,6 +881,10 @@ static uint16_t find_idx(struct qemu_plugin_insn *insn)
         if (masked_bits == entry->pattern){
             break;
         }
+    }
+
+    if (entry->mask == 0) {
+        unclassed_inst = inst;
     }
 
     g_assert(entry);
