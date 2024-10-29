@@ -21,6 +21,7 @@ NAMES += lockstep
 NAMES += hwprofile
 NAMES += cache
 NAMES += hotinstpair
+NAMES += trace
 
 SONAMES := $(addsuffix .so,$(addprefix lib,$(NAMES)))
 
